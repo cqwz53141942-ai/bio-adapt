@@ -1,5 +1,4 @@
 # bio-adapt
-# bio-adapt (Cloudflare Pages)
 
 Cloudflare Pages 全栈项目结构：
 
