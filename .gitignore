@@ -1,0 +1,6 @@
+.wrangler/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/src/*.js
+frontend/src/*.js.map
