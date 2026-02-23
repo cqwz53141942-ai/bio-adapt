@@ -273,15 +273,28 @@ export async function getWeatherByCity(city: string, env?: WeatherEnv): Promise<
   const forceMock = providerSetting === 'mock'
 
   const cache = caches.default
-  const providerKey: WeatherSource = forceMock ? 'mock' : 'open-meteo'
-  const cacheKey = buildWeatherCacheKey(providerKey, normalized, bucket)
-  const cacheRequest = new Request(`https://cache.local/weather?key=${encodeURIComponent(cacheKey)}`)
+  const openMeteoCacheKey = buildWeatherCacheKey('open-meteo', normalized, bucket)
+  const mockCacheKey = buildWeatherCacheKey('mock', normalized, bucket)
 
   if (!disableCache) {
-    const cached = await cache.match(cacheRequest)
-    if (cached) {
-      const cachedJson = (await cached.json()) as WeatherSnapshot
-      return { ...cachedJson, cacheKey, normalizedCity: normalized, cacheStatus: 'hit' }
+    if (tryOpenMeteo && !forceMock) {
+      const cachedOpen = await cache.match(
+        new Request(`https://cache.local/weather?key=${encodeURIComponent(openMeteoCacheKey)}`)
+      )
+      if (cachedOpen) {
+        const cachedJson = (await cachedOpen.json()) as WeatherSnapshot
+        return { ...cachedJson, cacheKey: openMeteoCacheKey, normalizedCity: normalized, cacheStatus: 'hit' }
+      }
+    }
+
+    if (forceMock) {
+      const cachedMock = await cache.match(
+        new Request(`https://cache.local/weather?key=${encodeURIComponent(mockCacheKey)}`)
+      )
+      if (cachedMock) {
+        const cachedJson = (await cachedMock.json()) as WeatherSnapshot
+        return { ...cachedJson, cacheKey: mockCacheKey, normalizedCity: normalized, cacheStatus: 'hit' }
+      }
     }
   }
 
@@ -301,6 +314,7 @@ export async function getWeatherByCity(city: string, env?: WeatherEnv): Promise<
   snapshot.temperatureC = clamp(snapshot.temperatureC, 8, 32)
   snapshot.humidity = clamp(snapshot.humidity, 30, 85)
 
+  const cacheKeyToUse = snapshot.source === 'open-meteo' ? openMeteoCacheKey : mockCacheKey
   snapshot.cacheStatus = disableCache ? 'bypass' : 'miss'
   if (!disableCache) {
     const response = new Response(JSON.stringify(snapshot), {
@@ -309,8 +323,11 @@ export async function getWeatherByCity(city: string, env?: WeatherEnv): Promise<
         'cache-control': `public, max-age=${ttlSeconds}`
       }
     })
-    await cache.put(cacheRequest, response.clone())
+    await cache.put(
+      new Request(`https://cache.local/weather?key=${encodeURIComponent(cacheKeyToUse)}`),
+      response.clone()
+    )
   }
 
-  return { ...snapshot, cacheKey, normalizedCity: normalized }
+  return { ...snapshot, cacheKey: cacheKeyToUse, normalizedCity: normalized }
 }
