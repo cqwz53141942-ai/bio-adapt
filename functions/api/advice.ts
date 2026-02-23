@@ -27,6 +27,7 @@ interface Env {
   TURNSTILE_SECRET?: string
   TCM_BACKEND_URL?: string
   TCM_BACKEND_API_KEY?: string
+  DEBUG_ADVICE?: string
 }
 
 const encoder = new TextEncoder()
@@ -97,18 +98,20 @@ async function verifyTurnstile(env: Env, token?: string): Promise<boolean> {
   return Boolean(data.success)
 }
 
-async function getMockWeather(city: string): Promise<{ city: string; tempC: number; humidity: number }> {
+async function getMockWeather(
+  city: string
+): Promise<{ city: string; tempC: number; humidity: number; cacheKey: string }> {
   const normalizedCity = city.trim() || '未知'
   const normalizedKey = normalizedCity.toLowerCase()
   const cache = caches.default
-  // Cache key contains city + 10-min bucket to ensure city-specific freshness.
+  // Weather cache: keyed by normalized city + 10-min bucket (city-specific, short TTL).
   const timeBucket = Math.floor(Date.now() / 600000)
-  const key = new Request(
-    `https://cache.local/weather?city=${encodeURIComponent(normalizedKey)}&bucket=${timeBucket}`
-  )
+  const cacheKey = `weather:${normalizedKey}:${timeBucket}`
+  const key = new Request(`https://cache.local/weather?key=${encodeURIComponent(cacheKey)}`)
   const cached = await cache.match(key)
   if (cached) {
-    return cached.json()
+    const data = (await cached.json()) as { city: string; tempC: number; humidity: number }
+    return { ...data, cacheKey }
   }
 
   const now = new Date()
@@ -133,7 +136,7 @@ async function getMockWeather(city: string): Promise<{ city: string; tempC: numb
   })
 
   await cache.put(key, response.clone())
-  return weather
+  return { ...weather, cacheKey }
 }
 
 async function callTcmBackend(
@@ -180,7 +183,11 @@ async function callTcmBackend(
   }
 }
 
-function buildAdvice(input: NormalizedInput, weather: { city: string; tempC: number; humidity: number }): string {
+function buildAdvice(
+  input: NormalizedInput,
+  weather: { city: string; tempC: number; humidity: number },
+  debugLine?: string
+): string {
   const risk = (input.age ?? 0) >= 60 ? '偏高' : (input.age ?? 0) >= 40 ? '中等' : '偏低'
   const symptomLine = input.symptoms.length ? input.symptoms.join('、') : '无明显不适'
 
@@ -203,7 +210,8 @@ function buildAdvice(input: NormalizedInput, weather: { city: string; tempC: num
     birthLine,
     sleepHours !== undefined ? `睡眠时长：约 ${sleepHours.toFixed(1)} 小时。` : undefined,
     hrv !== undefined ? `HRV：${hrv}。` : undefined,
-    steps !== undefined ? `步数：${steps}。` : undefined
+    steps !== undefined ? `步数：${steps}。` : undefined,
+    debugLine
   ]
     .filter(Boolean)
     .join(' ')
@@ -299,20 +307,25 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     }
 
     const weather = await getMockWeather(input.profile.city)
-
-    // Advice cache includes city + weather in the hash, and a short TTL bucket.
     const hash = await sha256Hex(JSON.stringify({ input, weather }))
     const cache = caches.default
     const adviceBucket = Math.floor(Date.now() / 300000)
-    const adviceCacheKey = new Request(`https://cache.local/advice?hash=${hash}&bucket=${adviceBucket}`)
+    // Advice cache: includes city via input + weather, and short TTL bucket.
+    const adviceCacheKeyValue = `advice:${hash}:${adviceBucket}`
+    const adviceCacheKey = new Request(`https://cache.local/advice?key=${encodeURIComponent(adviceCacheKeyValue)}`)
     const cachedAdvice = await cache.match(adviceCacheKey)
 
     if (cachedAdvice) {
       const text = await cachedAdvice.text()
       return streamText(text)
     }
+
+    const debugLine =
+      env.DEBUG_ADVICE === '1'
+        ? `（调试）城市:${input.profile.city.trim().toLowerCase()}｜weatherKey:${weather.cacheKey}｜adviceHash:${hash.slice(0, 8)}`
+        : undefined
     const backendAdvice = await callTcmBackend(env, input, weather)
-    const adviceText = backendAdvice ?? buildAdvice(input, weather)
+    const adviceText = backendAdvice ?? buildAdvice(input, weather, debugLine)
 
     await cache.put(
       adviceCacheKey,

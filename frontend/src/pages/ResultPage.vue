@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 type Sex = 'male' | 'female' | 'other'
 
@@ -37,6 +37,7 @@ type LegacyPayload = {
 }
 
 const router = useRouter()
+const route = useRoute()
 
 const loading = ref(false)
 const error = ref('')
@@ -224,6 +225,16 @@ async function fetchAdvice() {
 watch(streamOutput, (value) => {
   sections.value = parseSections(value)
 })
+
+watch(
+  () => route.fullPath,
+  async () => {
+    await loadPayload()
+    if (payload.value) {
+      await fetchAdvice()
+    }
+  }
+)
 
 watch(requestKey, (value, previous) => {
   if (!value || value === previous) return
