@@ -46,24 +46,27 @@ function normalizeInput(raw: unknown): NormalizedInput {
     turnstileToken?: string
   }
 
-  if (data.profile && data.symptoms && data.wearable) {
-    return {
-      profile: data.profile,
-      symptoms: Array.isArray(data.symptoms) ? data.symptoms : [],
-      wearable: data.wearable ?? {},
-      age: data.age,
-      turnstileToken: data.turnstileToken
-    }
+  const profile: Profile = data.profile ?? {
+    city: data.city ?? '未知',
+    sex: data.sex ?? 'other',
+    birth: data.birth
   }
+  const fallbackCity = typeof data.city === 'string' ? data.city : undefined
+  profile.city = (typeof profile.city === 'string' ? profile.city : fallbackCity ?? '').trim() || '未知'
+  profile.sex = profile.sex ?? (data.sex ?? 'other')
+
+  const symptoms = Array.isArray(data.symptoms)
+    ? data.symptoms
+    : typeof data.symptoms === 'string'
+      ? data.symptoms.split(',').map((item) => item.trim()).filter(Boolean)
+      : []
+
+  const wearable = data.wearable ?? {}
 
   return {
-    profile: {
-      city: data.city ?? '未知',
-      sex: data.sex ?? 'other',
-      birth: data.birth
-    },
-    symptoms: Array.isArray(data.symptoms) ? data.symptoms : [],
-    wearable: data.wearable ?? {},
+    profile,
+    symptoms,
+    wearable,
     age: data.age,
     turnstileToken: data.turnstileToken
   }
@@ -95,16 +98,20 @@ async function verifyTurnstile(env: Env, token?: string): Promise<boolean> {
 }
 
 async function getMockWeather(city: string): Promise<{ city: string; tempC: number; humidity: number }> {
+  const normalizedCity = city.trim() || '未知'
+  const timeBucket = Math.floor(Date.now() / 300000)
   const cache = caches.default
-  const key = new Request(`https://cache.local/weather?city=${encodeURIComponent(city.toLowerCase())}`)
+  const key = new Request(
+    `https://cache.local/weather?city=${encodeURIComponent(normalizedCity.toLowerCase())}&bucket=${timeBucket}`
+  )
   const cached = await cache.match(key)
   if (cached) {
     return cached.json()
   }
 
-  const seed = city.length
+  const seed = normalizedCity.length
   const weather = {
-    city,
+    city: normalizedCity,
     tempC: 18 + (seed % 12),
     humidity: 45 + (seed % 40)
   }
@@ -282,9 +289,10 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
       return new Response('Turnstile verification failed', { status: 403 })
     }
 
+    const timeBucket = Math.floor(Date.now() / 300000)
     const hash = await sha256Hex(JSON.stringify(input))
     const cache = caches.default
-    const adviceCacheKey = new Request(`https://cache.local/advice?hash=${hash}`)
+    const adviceCacheKey = new Request(`https://cache.local/advice?hash=${hash}&bucket=${timeBucket}`)
     const cachedAdvice = await cache.match(adviceCacheKey)
 
     if (cachedAdvice) {

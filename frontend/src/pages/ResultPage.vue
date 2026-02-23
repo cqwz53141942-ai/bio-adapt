@@ -25,6 +25,17 @@ type FormPayload = {
   turnstileToken?: string
 }
 
+type LegacyPayload = {
+  city?: string
+  sex?: Sex
+  birth?: Birth
+  age?: number
+  symptoms?: string | string[]
+  wearable?: Record<string, unknown>
+  wearableJson?: string
+  turnstileToken?: string
+}
+
 const router = useRouter()
 
 const loading = ref(false)
@@ -57,6 +68,41 @@ function parseSections(text: string) {
   return results
 }
 
+function normalizeLegacy(raw: LegacyPayload): FormPayload | null {
+  if ((raw as FormPayload).profile) return raw as FormPayload
+
+  const birth = raw.birth ?? { year: 1990, month: 1, day: 1, hour: 0 }
+  const profile = {
+    city: raw.city ?? '未知',
+    sex: raw.sex ?? 'other',
+    birth
+  }
+
+  let symptoms: string[] = []
+  if (Array.isArray(raw.symptoms)) {
+    symptoms = raw.symptoms
+  } else if (typeof raw.symptoms === 'string') {
+    symptoms = raw.symptoms.split(',').map((item) => item.trim()).filter(Boolean)
+  }
+
+  let wearable: Record<string, unknown> = raw.wearable ?? {}
+  if (!raw.wearable && raw.wearableJson) {
+    try {
+      wearable = JSON.parse(raw.wearableJson)
+    } catch {
+      wearable = {}
+    }
+  }
+
+  return {
+    profile,
+    symptoms,
+    wearable,
+    age: raw.age ?? 0,
+    turnstileToken: raw.turnstileToken
+  }
+}
+
 async function loadPayload() {
   const raw = sessionStorage.getItem('bio-adapt-form')
   if (!raw) {
@@ -65,7 +111,8 @@ async function loadPayload() {
   }
 
   try {
-    payload.value = JSON.parse(raw) as FormPayload
+    const parsed = JSON.parse(raw) as FormPayload | LegacyPayload
+    payload.value = normalizeLegacy(parsed)
   } catch {
     payload.value = null
   }
@@ -89,7 +136,7 @@ const analysisBasis = computed(() => {
   const profile = payload.value.profile
   const birth = `${profile.birth.year}年${profile.birth.month}月${profile.birth.day}日${profile.birth.hour}时`
   const symptoms = payload.value.symptoms.length ? payload.value.symptoms.join('、') : '无明显不适'
-  const wearableSummary = summarizeWearable(payload.value.wearable)
+  const wearableSummary = summarizeWearable(payload.value.wearable ?? {})
 
   return [
     `城市：${profile.city}`,
