@@ -99,32 +99,19 @@ async function verifyTurnstile(env: Env, token?: string): Promise<boolean> {
 
 async function getMockWeather(city: string): Promise<{ city: string; tempC: number; humidity: number }> {
   const normalizedCity = city.trim() || '未知'
-  const timeBucket = Math.floor(Date.now() / 60000)
-  const cache = caches.default
-  const key = new Request(
-    `https://cache.local/weather?city=${encodeURIComponent(normalizedCity.toLowerCase())}&bucket=${timeBucket}`
-  )
-  const cached = await cache.match(key)
-  if (cached) {
-    return cached.json()
-  }
-
+  const now = new Date()
   const seed = normalizedCity.length
-  const weather = {
+  const hour = now.getHours()
+  const tempBase = 16 + (seed % 10)
+  const tempSwing = Math.round(Math.sin((hour / 24) * Math.PI * 2) * 4)
+  const humidityBase = 50 + (seed % 15)
+  const humiditySwing = Math.round(Math.cos((hour / 24) * Math.PI * 2) * 6)
+
+  return {
     city: normalizedCity,
-    tempC: 18 + (seed % 12),
-    humidity: 45 + (seed % 40)
+    tempC: tempBase + tempSwing,
+    humidity: Math.min(90, Math.max(20, humidityBase + humiditySwing))
   }
-
-  const response = new Response(JSON.stringify(weather), {
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': 'public, max-age=60'
-    }
-  })
-
-  await cache.put(key, response.clone())
-  return weather
 }
 
 async function callTcmBackend(
@@ -306,7 +293,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     await cache.put(
       adviceCacheKey,
       new Response(adviceText, {
-        headers: { 'cache-control': 'public, max-age=120' }
+        headers: { 'cache-control': 'public, max-age=60' }
       })
     )
 
