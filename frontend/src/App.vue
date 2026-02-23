@@ -23,7 +23,7 @@ async function submitForm() {
     wearable = JSON.parse(wearableJson.value)
   } catch {
     loading.value = false
-    error.value = 'wearable JSON 格式不正确'
+    error.value = 'Invalid wearable JSON format.'
     return
   }
 
@@ -46,7 +46,7 @@ async function submitForm() {
     })
 
     if (!response.ok || !response.body) {
-      throw new Error(`请求失败: ${response.status}`)
+      throw new Error(`Request failed: ${response.status}`)
     }
 
     const reader = response.body.getReader()
@@ -77,7 +77,7 @@ async function submitForm() {
       }
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '未知错误'
+    error.value = e instanceof Error ? e.message : 'Unknown error'
   } finally {
     loading.value = false
   }
@@ -87,21 +87,21 @@ async function submitForm() {
 <template>
   <main style="max-width: 860px; margin: 0 auto; padding: 24px; font-family: Arial, sans-serif;">
     <h1>Bio Adapt - Health Advice</h1>
-    <p style="color:#666;">中医养生建议（示例）</p>
+    <p style="color:#666;">Lifestyle guidance generated from your inputs (demo).</p>
 
     <form @submit.prevent="submitForm" style="display:grid; gap:12px; margin-top:16px;">
       <label>
-        城市
+        City
         <input v-model="city" type="text" style="width:100%; padding:8px;" />
       </label>
 
       <label>
-        年龄
+        Age
         <input v-model.number="age" type="number" min="1" max="120" style="width:100%; padding:8px;" />
       </label>
 
       <label>
-        性别
+        Sex
         <select v-model="sex" style="width:100%; padding:8px;">
           <option value="male">male</option>
           <option value="female">female</option>
@@ -110,12 +110,12 @@ async function submitForm() {
       </label>
 
       <label>
-        症状（逗号分隔）
+        Symptoms (comma separated)
         <input v-model="symptoms" type="text" style="width:100%; padding:8px;" />
       </label>
 
       <label>
-        手环数据 JSON
+        Wearable JSON
         <textarea
           v-model="wearableJson"
           rows="5"
@@ -124,7 +124,7 @@ async function submitForm() {
       </label>
 
       <button type="submit" :disabled="loading" style="padding:10px 14px; cursor:pointer;">
-        {{ loading ? '生成中...' : '生成建议' }}
+        {{ loading ? 'Generating...' : 'Generate advice' }}
       </button>
     </form>
 
@@ -133,7 +133,7 @@ async function submitForm() {
     </p>
 
     <section style="margin-top:20px;">
-      <h2>流式输出</h2>
+      <h2>Streaming output</h2>
       <pre
         style="white-space:pre-wrap; background:#f6f8fa; padding:12px; border-radius:8px; min-height:120px;"
       >{{ streamOutput }}</pre>
