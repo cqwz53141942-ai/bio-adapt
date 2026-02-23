@@ -99,7 +99,7 @@ async function verifyTurnstile(env: Env, token?: string): Promise<boolean> {
 
 async function getMockWeather(city: string): Promise<{ city: string; tempC: number; humidity: number }> {
   const normalizedCity = city.trim() || '未知'
-  const timeBucket = Math.floor(Date.now() / 300000)
+  const timeBucket = Math.floor(Date.now() / 60000)
   const cache = caches.default
   const key = new Request(
     `https://cache.local/weather?city=${encodeURIComponent(normalizedCity.toLowerCase())}&bucket=${timeBucket}`
@@ -119,7 +119,7 @@ async function getMockWeather(city: string): Promise<{ city: string; tempC: numb
   const response = new Response(JSON.stringify(weather), {
     headers: {
       'content-type': 'application/json',
-      'cache-control': 'public, max-age=300'
+      'cache-control': 'public, max-age=60'
     }
   })
 
@@ -289,25 +289,24 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
       return new Response('Turnstile verification failed', { status: 403 })
     }
 
-    const timeBucket = Math.floor(Date.now() / 300000)
-    const hash = await sha256Hex(JSON.stringify(input))
+    const weather = await getMockWeather(input.profile.city)
+
+    const hash = await sha256Hex(JSON.stringify({ input, weather }))
     const cache = caches.default
-    const adviceCacheKey = new Request(`https://cache.local/advice?hash=${hash}&bucket=${timeBucket}`)
+    const adviceCacheKey = new Request(`https://cache.local/advice?hash=${hash}`)
     const cachedAdvice = await cache.match(adviceCacheKey)
 
     if (cachedAdvice) {
       const text = await cachedAdvice.text()
       return streamText(text)
     }
-
-    const weather = await getMockWeather(input.profile.city)
     const backendAdvice = await callTcmBackend(env, input, weather)
     const adviceText = backendAdvice ?? buildAdvice(input, weather)
 
     await cache.put(
       adviceCacheKey,
       new Response(adviceText, {
-        headers: { 'cache-control': 'public, max-age=600' }
+        headers: { 'cache-control': 'public, max-age=120' }
       })
     )
 
