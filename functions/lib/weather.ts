@@ -1,4 +1,14 @@
 type WeatherSource = 'open-meteo' | 'mock'
+type CacheStatus = 'hit' | 'miss' | 'bypass'
+
+type GeocodeInfo = {
+  name?: string
+  country?: string
+  admin1?: string
+  latitude?: number
+  longitude?: number
+  timezone?: string
+}
 
 export type WeatherSnapshot = {
   condition: string
@@ -7,18 +17,50 @@ export type WeatherSnapshot = {
   source: WeatherSource
   observedAt?: string
   cacheKey?: string
+  cacheStatus?: CacheStatus
   normalizedCity?: string
+  geocode?: GeocodeInfo
 }
 
 type WeatherEnv = {
   WEATHER_PROVIDER?: string
   WEATHER_CACHE_TTL_SECONDS?: string
   WEATHER_TIMEOUT_MS?: string
+  WEATHER_DISABLE_CACHE?: string
+  WEATHER_DEBUG_RAW?: string
 }
 
 const DEFAULT_TTL_SECONDS = 600
 const DEFAULT_TIMEOUT_MS = 4000
-const WEATHER_VERSION = 'v1'
+const WEATHER_VERSION = 'v3'
+
+const CITY_NAME_MAP: Record<string, string> = {
+  北京: 'Beijing',
+  上海: 'Shanghai',
+  广州: 'Guangzhou',
+  深圳: 'Shenzhen',
+  重庆: 'Chongqing',
+  成都: 'Chengdu',
+  杭州: 'Hangzhou',
+  南京: 'Nanjing',
+  武汉: 'Wuhan',
+  西安: 'Xian',
+  苏州: 'Suzhou',
+  天津: 'Tianjin',
+  长沙: 'Changsha',
+  郑州: 'Zhengzhou',
+  青岛: 'Qingdao',
+  厦门: 'Xiamen',
+  福州: 'Fuzhou',
+  昆明: 'Kunming',
+  贵阳: 'Guiyang',
+  哈尔滨: 'Harbin',
+  沈阳: 'Shenyang',
+  合肥: 'Hefei',
+  南昌: 'Nanchang',
+  济南: 'Jinan',
+  宁波: 'Ningbo'
+}
 
 function normalizeCity(city: string): string {
   return city.trim().toLowerCase()
@@ -63,22 +105,71 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
   }
 }
 
+function parseCityAndAdmin(raw: string) {
+  const trimmed = raw.trim()
+  const parts = trimmed.split(/[,，]/).map((item) => item.trim()).filter(Boolean)
+  return {
+    name: parts[0] ?? trimmed,
+    admin1: parts[1]
+  }
+}
+
+function selectGeocodeResult(
+  results: Array<{
+    name?: string
+    country_code?: string
+    admin1?: string
+    latitude?: number
+    longitude?: number
+    timezone?: string
+  }>,
+  targetName: string,
+  targetAdmin?: string
+) {
+  const lowerName = targetName.toLowerCase()
+  let candidates = results
+  const cnCandidates = candidates.filter((item) => item.country_code === 'CN')
+  if (cnCandidates.length) candidates = cnCandidates
+  if (targetAdmin) {
+    const adminCandidates = candidates.filter(
+      (item) => (item.admin1 ?? '').toLowerCase() === targetAdmin.toLowerCase()
+    )
+    if (adminCandidates.length) candidates = adminCandidates
+  }
+
+  const exactName = candidates.find((item) => (item.name ?? '').toLowerCase() === lowerName)
+  return exactName ?? candidates[0]
+}
+
 async function getWeatherFromOpenMeteo(
   city: string,
   env?: WeatherEnv
 ): Promise<WeatherSnapshot | null> {
   const timeoutMs = Number(env?.WEATHER_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS)
-  const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh&format=json`
+  const parsed = parseCityAndAdmin(city)
+  const mappedName = CITY_NAME_MAP[parsed.name] ?? parsed.name
+  const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(mappedName)}&count=5&language=zh&format=json`
   const geoResp = await fetchWithTimeout(geoUrl, timeoutMs)
   if (!geoResp.ok) return null
-  const geo = (await geoResp.json()) as { results?: Array<{ latitude: number; longitude: number }> }
-  const location = geo.results?.[0]
-  if (!location) return null
+  const geo = (await geoResp.json()) as {
+    results?: Array<{
+      name?: string
+      country?: string
+      country_code?: string
+      admin1?: string
+      latitude?: number
+      longitude?: number
+      timezone?: string
+    }>
+  }
+  const location = geo.results ? selectGeocodeResult(geo.results, mappedName, parsed.admin1) : undefined
+  if (!location || location.latitude === undefined || location.longitude === undefined) return null
 
   const forecastUrl =
     `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}` +
     `&longitude=${location.longitude}` +
     `&current=temperature_2m,relative_humidity_2m,weather_code` +
+    `&hourly=temperature_2m,relative_humidity_2m,weather_code` +
     `&timezone=auto`
   const weatherResp = await fetchWithTimeout(forecastUrl, timeoutMs)
   if (!weatherResp.ok) return null
@@ -89,18 +180,69 @@ async function getWeatherFromOpenMeteo(
       weather_code?: number
       time?: string
     }
+    hourly?: {
+      time?: string[]
+      temperature_2m?: number[]
+      relative_humidity_2m?: number[]
+      weather_code?: number[]
+    }
   }
 
-  if (!data.current || data.current.temperature_2m === undefined || data.current.relative_humidity_2m === undefined) {
+  const current = data.current
+  let temperatureC = current?.temperature_2m
+  let humidity = current?.relative_humidity_2m
+  let weatherCode = current?.weather_code
+  let observedAt = current?.time
+
+  if (temperatureC === undefined || humidity === undefined) {
+    const hourly = data.hourly
+    const targetTime = current?.time ?? new Date().toISOString().slice(0, 13) + ':00'
+    const timeIndex = hourly?.time?.findIndex((value) => value === targetTime) ?? -1
+    const index = timeIndex >= 0 ? timeIndex : 0
+    temperatureC = hourly?.temperature_2m?.[index]
+    humidity = hourly?.relative_humidity_2m?.[index]
+    weatherCode = hourly?.weather_code?.[index]
+    observedAt = hourly?.time?.[index]
+  }
+
+  if (temperatureC === undefined || humidity === undefined) {
+    if (env?.WEATHER_DEBUG_RAW === '1') {
+      console.log('open-meteo missing data', {
+        city,
+        mappedName,
+        current,
+        hourly: data.hourly
+      })
+    }
     return null
   }
 
+  if (env?.WEATHER_DEBUG_RAW === '1') {
+    console.log('open-meteo snapshot', {
+      city,
+      mappedName,
+      location,
+      temperatureC,
+      humidity,
+      weatherCode,
+      observedAt
+    })
+  }
+
   return {
-    condition: mapWeatherCode(data.current.weather_code),
-    temperatureC: data.current.temperature_2m,
-    humidity: data.current.relative_humidity_2m,
+    condition: mapWeatherCode(weatherCode),
+    temperatureC,
+    humidity,
     source: 'open-meteo',
-    observedAt: data.current.time
+    observedAt,
+    geocode: {
+      name: location.name,
+      country: location.country,
+      admin1: location.admin1,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      timezone: location.timezone
+    }
   }
 }
 
@@ -125,6 +267,7 @@ export async function getWeatherByCity(city: string, env?: WeatherEnv): Promise<
   const ttlSeconds = Number(env?.WEATHER_CACHE_TTL_SECONDS ?? DEFAULT_TTL_SECONDS)
   const bucket = Math.floor(Date.now() / (ttlSeconds * 1000))
   const providerSetting = (env?.WEATHER_PROVIDER ?? 'auto').toLowerCase()
+  const disableCache = env?.WEATHER_DISABLE_CACHE === '1'
 
   const tryOpenMeteo = providerSetting === 'auto' || providerSetting === 'open-meteo'
   const forceMock = providerSetting === 'mock'
@@ -133,10 +276,13 @@ export async function getWeatherByCity(city: string, env?: WeatherEnv): Promise<
   const providerKey: WeatherSource = forceMock ? 'mock' : 'open-meteo'
   const cacheKey = buildWeatherCacheKey(providerKey, normalized, bucket)
   const cacheRequest = new Request(`https://cache.local/weather?key=${encodeURIComponent(cacheKey)}`)
-  const cached = await cache.match(cacheRequest)
-  if (cached) {
-    const cachedJson = (await cached.json()) as WeatherSnapshot
-    return { ...cachedJson, cacheKey, normalizedCity: normalized }
+
+  if (!disableCache) {
+    const cached = await cache.match(cacheRequest)
+    if (cached) {
+      const cachedJson = (await cached.json()) as WeatherSnapshot
+      return { ...cachedJson, cacheKey, normalizedCity: normalized, cacheStatus: 'hit' }
+    }
   }
 
   let snapshot: WeatherSnapshot | null = null
@@ -155,13 +301,16 @@ export async function getWeatherByCity(city: string, env?: WeatherEnv): Promise<
   snapshot.temperatureC = clamp(snapshot.temperatureC, 8, 32)
   snapshot.humidity = clamp(snapshot.humidity, 30, 85)
 
-  const response = new Response(JSON.stringify(snapshot), {
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': `public, max-age=${ttlSeconds}`
-    }
-  })
-  await cache.put(cacheRequest, response.clone())
+  snapshot.cacheStatus = disableCache ? 'bypass' : 'miss'
+  if (!disableCache) {
+    const response = new Response(JSON.stringify(snapshot), {
+      headers: {
+        'content-type': 'application/json',
+        'cache-control': `public, max-age=${ttlSeconds}`
+      }
+    })
+    await cache.put(cacheRequest, response.clone())
+  }
 
   return { ...snapshot, cacheKey, normalizedCity: normalized }
 }

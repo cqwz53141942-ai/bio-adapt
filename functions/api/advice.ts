@@ -33,6 +33,8 @@ interface Env {
   WEATHER_PROVIDER?: string
   WEATHER_CACHE_TTL_SECONDS?: string
   WEATHER_TIMEOUT_MS?: string
+  WEATHER_DISABLE_CACHE?: string
+  WEATHER_DEBUG_RAW?: string
 }
 
 const encoder = new TextEncoder()
@@ -303,9 +305,13 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
       return streamText(text)
     }
 
+    const geocode = weatherSnapshot.geocode
+    const geocodeText = geocode
+      ? `${geocode.name ?? ''},${geocode.country ?? ''},${geocode.admin1 ?? ''},${geocode.latitude ?? ''},${geocode.longitude ?? ''},${geocode.timezone ?? ''}`
+      : 'n/a'
     const debugLine =
       env.DEBUG_ADVICE === '1'
-        ? `（调试）城市:${weather.normalizedCity ?? input.profile.city.trim().toLowerCase()}｜source:${weather.source}｜weatherKey:${weather.cacheKey ?? 'n/a'}｜temp:${weather.temperatureC}｜hum:${weather.humidity}｜adviceHash:${hash.slice(0, 8)}`
+        ? `（调试）城市:${weather.normalizedCity ?? input.profile.city.trim().toLowerCase()}｜source:${weather.source}｜cache:${weatherSnapshot.cacheStatus ?? 'n/a'}｜weatherKey:${weather.cacheKey ?? 'n/a'}｜temp:${weather.temperatureC}｜hum:${weather.humidity}｜observedAt:${weatherSnapshot.observedAt ?? 'n/a'}｜geocode:${geocodeText}｜adviceHash:${hash.slice(0, 8)}`
         : undefined
     const backendAdvice = await callTcmBackend(env, input, weather)
     const adviceText = backendAdvice ?? buildAdvice(input, weather, debugLine)

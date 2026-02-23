@@ -48,6 +48,8 @@ Turnstile 防刷：
 - `WEATHER_PROVIDER`：`auto` | `open-meteo` | `mock`
 - `WEATHER_CACHE_TTL_SECONDS`：缓存秒数（默认 600）
 - `WEATHER_TIMEOUT_MS`：请求超时时间（默认 4000）
+- `WEATHER_DISABLE_CACHE`：`1` 时关闭天气缓存（排查使用）
+- `WEATHER_DEBUG_RAW`：`1` 时输出 Open-Meteo 原始关键字段
 
 ## 本地开发
 
