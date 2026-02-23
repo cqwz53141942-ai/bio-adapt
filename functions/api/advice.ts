@@ -1,3 +1,5 @@
+import { getWeatherByCity } from '../lib/weather'
+
 type Sex = 'male' | 'female' | 'other'
 
 type Birth = {
@@ -28,6 +30,9 @@ interface Env {
   TCM_BACKEND_URL?: string
   TCM_BACKEND_API_KEY?: string
   DEBUG_ADVICE?: string
+  WEATHER_PROVIDER?: string
+  WEATHER_CACHE_TTL_SECONDS?: string
+  WEATHER_TIMEOUT_MS?: string
 }
 
 const encoder = new TextEncoder()
@@ -78,15 +83,6 @@ async function sha256Hex(input: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-function hashString(value: string): number {
-  let hash = 2166136261
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i)
-    hash = Math.imul(hash, 16777619)
-  }
-  return hash >>> 0
-}
-
 async function verifyTurnstile(env: Env, token?: string): Promise<boolean> {
   if (!env.TURNSTILE_SECRET) return true
   if (!token) return false
@@ -107,62 +103,10 @@ async function verifyTurnstile(env: Env, token?: string): Promise<boolean> {
   return Boolean(data.success)
 }
 
-async function getMockWeather(
-  city: string
-): Promise<{
-  city: string
-  tempC: number
-  humidity: number
-  condition: string
-  cacheKey: string
-  source: 'cache' | 'mock'
-}> {
-  const normalizedCity = city.trim() || '未知'
-  const normalizedKey = normalizedCity.toLowerCase()
-  const cache = caches.default
-  // Weather cache: keyed by normalized city + 10-min bucket (city-specific, short TTL).
-  const timeBucket = Math.floor(Date.now() / 600000)
-  const cacheKey = `weather:${normalizedKey}:${timeBucket}`
-  const key = new Request(`https://cache.local/weather?key=${encodeURIComponent(cacheKey)}`)
-  const cached = await cache.match(key)
-  if (cached) {
-    const data = (await cached.json()) as {
-      city: string
-      tempC: number
-      humidity: number
-      condition: string
-    }
-    return { ...data, cacheKey, source: 'cache' }
-  }
-
-  const hash = hashString(normalizedKey)
-  const tempC = 8 + (hash % 25)
-  const humidity = 30 + ((hash >>> 8) % 56)
-  const conditions = ['晴', '多云', '阴', '小雨', '阵雨', '多雾']
-  const condition = conditions[(hash >>> 16) % conditions.length]
-
-  const weather = {
-    city: normalizedCity,
-    tempC,
-    humidity,
-    condition
-  }
-
-  const response = new Response(JSON.stringify(weather), {
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': 'public, max-age=600'
-    }
-  })
-
-  await cache.put(key, response.clone())
-  return { ...weather, cacheKey, source: 'mock' }
-}
-
 async function callTcmBackend(
   env: Env,
   input: NormalizedInput,
-  weather: { city: string; tempC: number; humidity: number; condition?: string }
+  weather: { temperatureC: number; humidity: number; condition?: string }
 ): Promise<string | null> {
   if (!env.TCM_BACKEND_URL) return null
 
@@ -205,7 +149,7 @@ async function callTcmBackend(
 
 function buildAdvice(
   input: NormalizedInput,
-  weather: { city: string; tempC: number; humidity: number; condition?: string },
+  weather: { temperatureC: number; humidity: number; condition?: string; source?: string; cacheKey?: string },
   debugLine?: string
 ): string {
   const risk = (input.age ?? 0) >= 60 ? '偏高' : (input.age ?? 0) >= 40 ? '中等' : '偏低'
@@ -215,7 +159,8 @@ function buildAdvice(
   const hrv = toNumber(input.wearable.hrv)
   const steps = toNumber(input.wearable.steps)
 
-  const tempBias = weather.tempC >= 28 ? '偏热' : weather.tempC <= 10 ? '偏寒' : '偏平'
+  const tempBias =
+    weather.temperatureC >= 28 ? '偏热' : weather.temperatureC <= 10 ? '偏寒' : '偏平'
   const humidityHint =
     weather.humidity >= 70 ? '体感偏闷湿' : weather.humidity <= 35 ? '体感偏干燥' : '体感适中'
 
@@ -224,7 +169,7 @@ function buildAdvice(
     : undefined
 
   const overall = [
-    `城市：${input.profile.city}，当前约 ${weather.tempC}℃，湿度 ${weather.humidity}%。`,
+    `城市：${input.profile.city}，当前约 ${weather.temperatureC}℃，湿度 ${weather.humidity}%。`,
     `体感偏向：${tempBias}（${humidityHint}）。`,
     `年龄影响：${risk}；自述症状：${symptomLine}。`,
     birthLine,
@@ -326,11 +271,29 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
       return new Response('Turnstile verification failed', { status: 403 })
     }
 
-    const weather = await getMockWeather(input.profile.city)
-    const hash = await sha256Hex(JSON.stringify({ input, weather }))
+    const weatherSnapshot = await getWeatherByCity(input.profile.city, env)
+    const weather = {
+      temperatureC: weatherSnapshot.temperatureC,
+      humidity: weatherSnapshot.humidity,
+      condition: weatherSnapshot.condition,
+      source: weatherSnapshot.source,
+      cacheKey: weatherSnapshot.cacheKey,
+      normalizedCity: weatherSnapshot.normalizedCity
+    }
+
+    const hash = await sha256Hex(
+      JSON.stringify({
+        input,
+        weather: {
+          temperatureC: weather.temperatureC,
+          humidity: weather.humidity,
+          condition: weather.condition,
+          source: weather.source
+        }
+      })
+    )
     const cache = caches.default
     const adviceBucket = Math.floor(Date.now() / 300000)
-    // Advice cache: includes city via input + weather, and short TTL bucket.
     const adviceCacheKeyValue = `advice:${hash}:${adviceBucket}`
     const adviceCacheKey = new Request(`https://cache.local/advice?key=${encodeURIComponent(adviceCacheKeyValue)}`)
     const cachedAdvice = await cache.match(adviceCacheKey)
@@ -342,7 +305,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
 
     const debugLine =
       env.DEBUG_ADVICE === '1'
-        ? `（调试）城市:${input.profile.city.trim().toLowerCase()}｜source:${weather.source}｜weatherKey:${weather.cacheKey}｜temp:${weather.tempC}｜hum:${weather.humidity}｜adviceHash:${hash.slice(0, 8)}`
+        ? `（调试）城市:${weather.normalizedCity ?? input.profile.city.trim().toLowerCase()}｜source:${weather.source}｜weatherKey:${weather.cacheKey ?? 'n/a'}｜temp:${weather.temperatureC}｜hum:${weather.humidity}｜adviceHash:${hash.slice(0, 8)}`
         : undefined
     const backendAdvice = await callTcmBackend(env, input, weather)
     const adviceText = backendAdvice ?? buildAdvice(input, weather, debugLine)

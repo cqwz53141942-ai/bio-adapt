@@ -36,6 +36,19 @@ Turnstile 防刷：
 说明：天气按城市维度做短 TTL 缓存，切换城市会重新计算建议。
 如未配置真实天气服务或服务不可用，将按城市生成稳定的 mock 天气用于演示（不同城市结果不同）。
 
+## 天气 Provider
+
+- 默认：`WEATHER_PROVIDER=auto`，优先 Open-Meteo，失败自动回退 mock。
+- 可选：`WEATHER_PROVIDER=open-meteo` 或 `WEATHER_PROVIDER=mock`。
+- 缓存：按城市 + TTL 时间桶缓存，避免不同城市串缓存。
+- 调试：设置 `DEBUG_ADVICE=1` 可在总体判断末尾看到调试行。
+
+### 天气相关环境变量
+
+- `WEATHER_PROVIDER`：`auto` | `open-meteo` | `mock`
+- `WEATHER_CACHE_TTL_SECONDS`：缓存秒数（默认 600）
+- `WEATHER_TIMEOUT_MS`：请求超时时间（默认 4000）
+
 ## 本地开发
 
 ```bash
