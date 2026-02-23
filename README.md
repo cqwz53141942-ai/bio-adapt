@@ -2,9 +2,14 @@
 
 Cloudflare Pages 全栈项目结构：
 
-- `frontend/` - Vue 3 + Vite + TypeScript
+- `frontend/` - Vue 3 + Vite + Vue Router + TypeScript
 - `functions/api/health.ts`
 - `functions/api/advice.ts`（SSE）
+
+## 页面结构
+
+- `/input`：输入页（城市、出生时间、性别、症状、可穿戴数据、Turnstile、人机验证、检查服务状态）
+- `/result`：结果页（流式分段建议展示）
 
 ## Cloudflare Pages 构建配置
 
@@ -16,12 +21,17 @@ Cloudflare Pages 全栈项目结构：
 
 Functions 目录位于仓库根目录 `functions/`。
 
-## Turnstile 防刷
+## 环境变量
 
-后端与前端分别配置环境变量：
+Turnstile 防刷：
 
 - `TURNSTILE_SECRET`：Cloudflare Turnstile Secret Key（后端校验用，未配置会自动跳过校验）
 - `VITE_TURNSTILE_SITE_KEY`：Cloudflare Turnstile Site Key（前端渲染组件用）
+
+中医后台分析（可选）：
+
+- `TCM_BACKEND_URL`：后端分析服务地址（配置后将优先调用，失败则自动回退本地规则引擎）
+- `TCM_BACKEND_API_KEY`：后端分析服务 API Key（可选）
 
 ## 本地开发
 
@@ -34,8 +44,7 @@ npm run dev
 ## 构建
 
 ```bash
-cd frontend
-npm run build
+npm --prefix frontend run build
 ```
 
 ## API

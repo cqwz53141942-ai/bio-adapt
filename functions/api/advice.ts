@@ -4,11 +4,19 @@ age: number
 sex: 'male' | 'female' | 'other'
 symptoms: string[]
 wearable: Record<string, unknown>
+birth?: {
+  year: number
+  month: number
+  day: number
+  hour: number
+}
 turnstileToken?: string
 }
 
 interface Env {
 TURNSTILE_SECRET?: string
+TCM_BACKEND_URL?: string
+TCM_BACKEND_API_KEY?: string
 }
 
 const encoder = new TextEncoder()
@@ -64,6 +72,52 @@ await cache.put(key, response.clone())
 return weather
 }
 
+async function callTcmBackend(
+  env: Env,
+  input: AdviceInput,
+  weather: { city: string; tempC: number; humidity: number }
+): Promise<string | null> {
+  if (!env.TCM_BACKEND_URL) return null
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 4000)
+
+  try {
+    const response = await fetch(env.TCM_BACKEND_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(env.TCM_BACKEND_API_KEY ? { 'x-api-key': env.TCM_BACKEND_API_KEY } : {})
+      },
+      body: JSON.stringify({
+        city: input.city,
+        birth: input.birth,
+        age: input.age,
+        sex: input.sex,
+        symptoms: input.symptoms,
+        wearable: input.wearable,
+        weather
+      }),
+      signal: controller.signal
+    })
+
+    if (!response.ok) return null
+
+    const contentType = response.headers.get('content-type') ?? ''
+    if (contentType.includes('application/json')) {
+      const data = (await response.json()) as { text?: string; advice?: string }
+      return data.text ?? data.advice ?? null
+    }
+
+    const text = await response.text()
+    return text || null
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 function buildAdvice(input: AdviceInput, weather: { city: string; tempC: number; humidity: number }): string {
   const risk = input.age >= 60 ? '偏高' : input.age >= 40 ? '中等' : '偏低'
   const symptomLine = input.symptoms.length ? input.symptoms.join('、') : '无明显不适'
@@ -82,6 +136,9 @@ function buildAdvice(input: AdviceInput, weather: { city: string; tempC: number;
     `城市：${input.city}，当前约 ${weather.tempC}℃，湿度 ${weather.humidity}%。`,
     `体感偏向：${tempBias}（${humidityHint}）。`,
     `年龄影响：${risk}；自述症状：${symptomLine}。`,
+    input.birth
+      ? `出生时间：${input.birth.year}年${input.birth.month}月${input.birth.day}日${input.birth.hour}时（用于四柱参考）。`
+      : undefined,
     sleepHours !== undefined ? `睡眠时长：约 ${sleepHours.toFixed(1)} 小时。` : undefined,
     hrv !== undefined ? `HRV：${hrv}。` : undefined,
     steps !== undefined ? `步数：${steps}。` : undefined
@@ -187,7 +244,8 @@ if (cachedAdvice) {
 }
 
 const weather = await getMockWeather(input.city)
-const adviceText = buildAdvice(input, weather)
+const backendAdvice = await callTcmBackend(env, input, weather)
+const adviceText = backendAdvice ?? buildAdvice(input, weather)
 
 await cache.put(
   adviceCacheKey,
