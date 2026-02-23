@@ -65,20 +65,82 @@ return weather
 }
 
 function buildAdvice(input: AdviceInput, weather: { city: string; tempC: number; humidity: number }): string {
-const risk = input.age >= 60 ? 'higher' : input.age >= 40 ? 'moderate' : 'lower'
-const symptomLine = input.symptoms.length ? input.symptoms.join(', ') : 'none reported'
-const hydration = weather.tempC >= 28 ? 'Increase hydration and avoid mid-day outdoor strain.' : 'Maintain regular hydration.'
-const sleepHint = typeof input.wearable.sleepHours === 'number' && (input.wearable.sleepHours as number) < 7
-? 'Your wearable suggests short sleep; target 7-8h with consistent bedtime.'
-: 'Keep sleep schedule stable and monitor recovery.'
+  const risk = input.age >= 60 ? '偏高' : input.age >= 40 ? '中等' : '偏低'
+  const symptomLine = input.symptoms.length ? input.symptoms.join('、') : '无明显不适'
 
-return [
-`City: ${input.city}. Weather now ~${weather.tempC}C, humidity ${weather.humidity}%.`,
-`Age risk tier: ${risk}. Symptoms: ${symptomLine}.`,
-hydration,
-sleepHint,
-'If symptoms worsen or persist, seek professional medical care promptly.'
-].join('\n')
+  const getNumber = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined)
+  const sleepHours = getNumber(input.wearable.sleepHours)
+  const hrv = getNumber(input.wearable.hrv)
+  const steps = getNumber(input.wearable.steps)
+
+  const tempBias =
+    weather.tempC >= 28 ? '偏热' : weather.tempC <= 10 ? '偏寒' : '偏平'
+  const humidityHint =
+    weather.humidity >= 70 ? '体感偏闷湿' : weather.humidity <= 35 ? '体感偏干燥' : '体感适中'
+
+  const overall = [
+    `城市：${input.city}，当前约 ${weather.tempC}℃，湿度 ${weather.humidity}%。`,
+    `体感偏向：${tempBias}（${humidityHint}）。`,
+    `年龄影响：${risk}；自述症状：${symptomLine}。`,
+    sleepHours !== undefined ? `睡眠时长：约 ${sleepHours.toFixed(1)} 小时。` : undefined,
+    hrv !== undefined ? `HRV：${hrv}。` : undefined,
+    steps !== undefined ? `步数：${steps}。` : undefined
+  ].filter(Boolean).join(' ')
+
+  const routine = [
+    sleepHours !== undefined && sleepHours < 7
+      ? '近期睡眠偏短，建议将就寝时间前移 30-60 分钟，保证 7-8 小时睡眠。'
+      : '保持规律作息，尽量固定就寝与起床时间。',
+    tempBias === '偏热'
+      ? '白天注意避开正午高温时段，午后适当小憩。'
+      : tempBias === '偏寒'
+        ? '注意腰腹与足部保暖，减少久坐久站。'
+        : '作息保持平稳，避免熬夜。'
+  ].join(' ')
+
+  const diet = [
+    tempBias === '偏热'
+      ? '饮食以清淡为主，适量补水，可多选瓜果与清润汤品。'
+      : tempBias === '偏寒'
+        ? '饮食以温润为主，少冷饮，适量加入姜枣类温养食材。'
+        : '饮食保持清淡均衡，蔬果与优质蛋白搭配。',
+    humidityHint === '体感偏闷湿'
+      ? '减少油腻甜食，控制晚间重口味。'
+      : humidityHint === '体感偏干燥'
+        ? '适当补充温水与润燥食材。'
+        : '保持三餐规律，少量多餐更稳。'
+  ].join(' ')
+
+  const exercise = [
+    steps !== undefined && steps < 6000
+      ? '今日活动量偏低，可安排 20-30 分钟轻中强度步行。'
+      : '保持适度活动，避免过度疲劳。',
+    tempBias === '偏热'
+      ? '运动尽量选择清晨或傍晚，注意补水与散热。'
+      : tempBias === '偏寒'
+        ? '运动前充分热身，避免受寒。'
+        : '运动后拉伸放松，避免肌肉紧绷。'
+  ].join(' ')
+
+  const today = [
+    input.symptoms.includes('疲劳') || input.symptoms.includes('fatigue')
+      ? '今日可降低强度，专注恢复与舒缓。'
+      : '根据体感灵活调整节奏，量力而行。',
+    hrv !== undefined && hrv < 30
+      ? 'HRV 偏低时建议减少高强度刺激。'
+      : '保持情绪平稳，避免连续高压工作。'
+  ].join(' ')
+
+  const disclaimer = '以上建议用于日常养生参考，不构成诊断或治疗意见；如不适持续或加重，请及时咨询专业医生。'
+
+  return [
+    `【总体判断】\n${overall}`,
+    `【作息建议】\n${routine}`,
+    `【饮食建议】\n${diet}`,
+    `【运动建议】\n${exercise}`,
+    `【今日提醒】\n${today}`,
+    `【免责声明】\n${disclaimer}`
+  ].join('\n\n')
 }
 
 function sseHeaders() {
