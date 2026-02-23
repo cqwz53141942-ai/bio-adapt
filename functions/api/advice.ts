@@ -78,6 +78,15 @@ async function sha256Hex(input: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+function hashString(value: string): number {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
 async function verifyTurnstile(env: Env, token?: string): Promise<boolean> {
   if (!env.TURNSTILE_SECRET) return true
   if (!token) return false
@@ -100,7 +109,14 @@ async function verifyTurnstile(env: Env, token?: string): Promise<boolean> {
 
 async function getMockWeather(
   city: string
-): Promise<{ city: string; tempC: number; humidity: number; cacheKey: string }> {
+): Promise<{
+  city: string
+  tempC: number
+  humidity: number
+  condition: string
+  cacheKey: string
+  source: 'cache' | 'mock'
+}> {
   const normalizedCity = city.trim() || '未知'
   const normalizedKey = normalizedCity.toLowerCase()
   const cache = caches.default
@@ -110,22 +126,26 @@ async function getMockWeather(
   const key = new Request(`https://cache.local/weather?key=${encodeURIComponent(cacheKey)}`)
   const cached = await cache.match(key)
   if (cached) {
-    const data = (await cached.json()) as { city: string; tempC: number; humidity: number }
-    return { ...data, cacheKey }
+    const data = (await cached.json()) as {
+      city: string
+      tempC: number
+      humidity: number
+      condition: string
+    }
+    return { ...data, cacheKey, source: 'cache' }
   }
 
-  const now = new Date()
-  const seed = normalizedCity.length
-  const hour = now.getHours()
-  const tempBase = 16 + (seed % 10)
-  const tempSwing = Math.round(Math.sin((hour / 24) * Math.PI * 2) * 4)
-  const humidityBase = 50 + (seed % 15)
-  const humiditySwing = Math.round(Math.cos((hour / 24) * Math.PI * 2) * 6)
+  const hash = hashString(normalizedKey)
+  const tempC = 8 + (hash % 25)
+  const humidity = 30 + ((hash >>> 8) % 56)
+  const conditions = ['晴', '多云', '阴', '小雨', '阵雨', '多雾']
+  const condition = conditions[(hash >>> 16) % conditions.length]
 
   const weather = {
     city: normalizedCity,
-    tempC: tempBase + tempSwing,
-    humidity: Math.min(90, Math.max(20, humidityBase + humiditySwing))
+    tempC,
+    humidity,
+    condition
   }
 
   const response = new Response(JSON.stringify(weather), {
@@ -136,13 +156,13 @@ async function getMockWeather(
   })
 
   await cache.put(key, response.clone())
-  return { ...weather, cacheKey }
+  return { ...weather, cacheKey, source: 'mock' }
 }
 
 async function callTcmBackend(
   env: Env,
   input: NormalizedInput,
-  weather: { city: string; tempC: number; humidity: number }
+  weather: { city: string; tempC: number; humidity: number; condition?: string }
 ): Promise<string | null> {
   if (!env.TCM_BACKEND_URL) return null
 
@@ -185,7 +205,7 @@ async function callTcmBackend(
 
 function buildAdvice(
   input: NormalizedInput,
-  weather: { city: string; tempC: number; humidity: number },
+  weather: { city: string; tempC: number; humidity: number; condition?: string },
   debugLine?: string
 ): string {
   const risk = (input.age ?? 0) >= 60 ? '偏高' : (input.age ?? 0) >= 40 ? '中等' : '偏低'
@@ -322,7 +342,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
 
     const debugLine =
       env.DEBUG_ADVICE === '1'
-        ? `（调试）城市:${input.profile.city.trim().toLowerCase()}｜weatherKey:${weather.cacheKey}｜adviceHash:${hash.slice(0, 8)}`
+        ? `（调试）城市:${input.profile.city.trim().toLowerCase()}｜source:${weather.source}｜weatherKey:${weather.cacheKey}｜temp:${weather.tempC}｜hum:${weather.humidity}｜adviceHash:${hash.slice(0, 8)}`
         : undefined
     const backendAdvice = await callTcmBackend(env, input, weather)
     const adviceText = backendAdvice ?? buildAdvice(input, weather, debugLine)
