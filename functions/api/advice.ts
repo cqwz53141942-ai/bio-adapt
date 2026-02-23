@@ -1,80 +1,128 @@
-interface AdviceInput {
-city: string
-age: number
-sex: 'male' | 'female' | 'other'
-symptoms: string[]
-wearable: Record<string, unknown>
-birth?: {
+type Sex = 'male' | 'female' | 'other'
+
+type Birth = {
   year: number
   month: number
   day: number
   hour: number
 }
-turnstileToken?: string
+
+type Profile = {
+  city: string
+  sex: Sex
+  birth?: Birth
 }
 
+type AdviceInput = {
+  profile: Profile
+  symptoms: string[]
+  wearable: Record<string, unknown>
+  age?: number
+  turnstileToken?: string
+}
+
+type NormalizedInput = AdviceInput
+
 interface Env {
-TURNSTILE_SECRET?: string
-TCM_BACKEND_URL?: string
-TCM_BACKEND_API_KEY?: string
+  TURNSTILE_SECRET?: string
+  TCM_BACKEND_URL?: string
+  TCM_BACKEND_API_KEY?: string
 }
 
 const encoder = new TextEncoder()
 
+function toNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function normalizeInput(raw: unknown): NormalizedInput {
+  const data = (raw ?? {}) as Partial<AdviceInput> & {
+    city?: string
+    sex?: Sex
+    birth?: Birth
+    symptoms?: string[] | string
+    wearable?: Record<string, unknown>
+    age?: number
+    turnstileToken?: string
+  }
+
+  if (data.profile && data.symptoms && data.wearable) {
+    return {
+      profile: data.profile,
+      symptoms: Array.isArray(data.symptoms) ? data.symptoms : [],
+      wearable: data.wearable ?? {},
+      age: data.age,
+      turnstileToken: data.turnstileToken
+    }
+  }
+
+  return {
+    profile: {
+      city: data.city ?? '未知',
+      sex: data.sex ?? 'other',
+      birth: data.birth
+    },
+    symptoms: Array.isArray(data.symptoms) ? data.symptoms : [],
+    wearable: data.wearable ?? {},
+    age: data.age,
+    turnstileToken: data.turnstileToken
+  }
+}
+
 async function sha256Hex(input: string): Promise<string> {
-const digest = await crypto.subtle.digest('SHA-256', encoder.encode(input))
-return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('')
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(input))
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 async function verifyTurnstile(env: Env, token?: string): Promise<boolean> {
-if (!env.TURNSTILE_SECRET) return true
-if (!token) return false
+  if (!env.TURNSTILE_SECRET) return true
+  if (!token) return false
 
-const body = new URLSearchParams({
-secret: env.TURNSTILE_SECRET,
-response: token
-})
+  const body = new URLSearchParams({
+    secret: env.TURNSTILE_SECRET,
+    response: token
+  })
 
-const result = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-method: 'POST',
-headers: { 'content-type': 'application/x-www-form-urlencoded' },
-body
-})
+  const result = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body
+  })
 
-if (!result.ok) return false
-const data = await result.json<{ success?: boolean }>()
-return Boolean(data.success)
+  if (!result.ok) return false
+  const data = await result.json<{ success?: boolean }>()
+  return Boolean(data.success)
 }
 
 async function getMockWeather(city: string): Promise<{ city: string; tempC: number; humidity: number }> {
-const cache = caches.default
-const key = new Request(`https://cache.local/weather?city=${encodeURIComponent(city.toLowerCase())}`)
-const cached = await cache.match(key)
-if (cached) {
-return cached.json()
-}
+  const cache = caches.default
+  const key = new Request(`https://cache.local/weather?city=${encodeURIComponent(city.toLowerCase())}`)
+  const cached = await cache.match(key)
+  if (cached) {
+    return cached.json()
+  }
 
-const seed = city.length
-const weather = {
-city,
-tempC: 18 + (seed % 12),
-humidity: 45 + (seed % 40)
-}
+  const seed = city.length
+  const weather = {
+    city,
+    tempC: 18 + (seed % 12),
+    humidity: 45 + (seed % 40)
+  }
 
-const response = new Response(JSON.stringify(weather), {
-headers: {
-'content-type': 'application/json',
-'cache-control': 'public, max-age=300'
-}
-})
+  const response = new Response(JSON.stringify(weather), {
+    headers: {
+      'content-type': 'application/json',
+      'cache-control': 'public, max-age=300'
+    }
+  })
 
-await cache.put(key, response.clone())
-return weather
+  await cache.put(key, response.clone())
+  return weather
 }
 
 async function callTcmBackend(
   env: Env,
-  input: AdviceInput,
+  input: NormalizedInput,
   weather: { city: string; tempC: number; humidity: number }
 ): Promise<string | null> {
   if (!env.TCM_BACKEND_URL) return null
@@ -90,12 +138,10 @@ async function callTcmBackend(
         ...(env.TCM_BACKEND_API_KEY ? { 'x-api-key': env.TCM_BACKEND_API_KEY } : {})
       },
       body: JSON.stringify({
-        city: input.city,
-        birth: input.birth,
-        age: input.age,
-        sex: input.sex,
+        profile: input.profile,
         symptoms: input.symptoms,
         wearable: input.wearable,
+        age: input.age,
         weather
       }),
       signal: controller.signal
@@ -118,31 +164,33 @@ async function callTcmBackend(
   }
 }
 
-function buildAdvice(input: AdviceInput, weather: { city: string; tempC: number; humidity: number }): string {
-  const risk = input.age >= 60 ? '偏高' : input.age >= 40 ? '中等' : '偏低'
+function buildAdvice(input: NormalizedInput, weather: { city: string; tempC: number; humidity: number }): string {
+  const risk = (input.age ?? 0) >= 60 ? '偏高' : (input.age ?? 0) >= 40 ? '中等' : '偏低'
   const symptomLine = input.symptoms.length ? input.symptoms.join('、') : '无明显不适'
 
-  const getNumber = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined)
-  const sleepHours = getNumber(input.wearable.sleepHours)
-  const hrv = getNumber(input.wearable.hrv)
-  const steps = getNumber(input.wearable.steps)
+  const sleepHours = toNumber(input.wearable.sleepHours)
+  const hrv = toNumber(input.wearable.hrv)
+  const steps = toNumber(input.wearable.steps)
 
-  const tempBias =
-    weather.tempC >= 28 ? '偏热' : weather.tempC <= 10 ? '偏寒' : '偏平'
+  const tempBias = weather.tempC >= 28 ? '偏热' : weather.tempC <= 10 ? '偏寒' : '偏平'
   const humidityHint =
     weather.humidity >= 70 ? '体感偏闷湿' : weather.humidity <= 35 ? '体感偏干燥' : '体感适中'
 
+  const birthLine = input.profile.birth
+    ? `出生时间：${input.profile.birth.year}年${input.profile.birth.month}月${input.profile.birth.day}日${input.profile.birth.hour}时（用于四柱参考）。`
+    : undefined
+
   const overall = [
-    `城市：${input.city}，当前约 ${weather.tempC}℃，湿度 ${weather.humidity}%。`,
+    `城市：${input.profile.city}，当前约 ${weather.tempC}℃，湿度 ${weather.humidity}%。`,
     `体感偏向：${tempBias}（${humidityHint}）。`,
     `年龄影响：${risk}；自述症状：${symptomLine}。`,
-    input.birth
-      ? `出生时间：${input.birth.year}年${input.birth.month}月${input.birth.day}日${input.birth.hour}时（用于四柱参考）。`
-      : undefined,
+    birthLine,
     sleepHours !== undefined ? `睡眠时长：约 ${sleepHours.toFixed(1)} 小时。` : undefined,
     hrv !== undefined ? `HRV：${hrv}。` : undefined,
     steps !== undefined ? `步数：${steps}。` : undefined
-  ].filter(Boolean).join(' ')
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   const routine = [
     sleepHours !== undefined && sleepHours < 7
@@ -188,7 +236,7 @@ function buildAdvice(input: AdviceInput, weather: { city: string; tempC: number;
       : '保持情绪平稳，避免连续高压工作。'
   ].join(' ')
 
-  const disclaimer = '以上建议用于日常养生参考，不构成诊断或治疗意见；如不适持续或加重，请及时咨询专业医生。'
+  const disclaimer = '以上建议仅供日常养生参考，不构成诊断或治疗建议；如不适持续或加重，请及时咨询专业医生。'
 
   return [
     `【总体判断】\n${overall}`,
@@ -201,61 +249,62 @@ function buildAdvice(input: AdviceInput, weather: { city: string; tempC: number;
 }
 
 function sseHeaders() {
-return {
-'content-type': 'text/event-stream; charset=utf-8',
-'cache-control': 'no-cache, no-transform',
-connection: 'keep-alive'
-}
+  return {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive'
+  }
 }
 
 async function streamText(text: string): Promise<Response> {
-const stream = new ReadableStream({
-async start(controller) {
-const chunks = text.match(/.{1,60}(\s|$)/g) ?? [text]
-for (const chunk of chunks) {
-controller.enqueue(encoder.encode(`data: ${chunk}\n\n`))
-await new Promise(resolve => setTimeout(resolve, 80))
-}
-controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-controller.close()
-}
-})
+  const stream = new ReadableStream({
+    async start(controller) {
+      const chunks = text.match(/.{1,60}(\s|$)/g) ?? [text]
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(`data: ${chunk}\n\n`))
+        await new Promise((resolve) => setTimeout(resolve, 80))
+      }
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      controller.close()
+    }
+  })
 
-return new Response(stream, { headers: sseHeaders() })
+  return new Response(stream, { headers: sseHeaders() })
 }
 
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
-try {
-const input = (await request.json()) as AdviceInput
+  try {
+    const rawInput = await request.json()
+    const input = normalizeInput(rawInput)
 
-const humanVerified = await verifyTurnstile(env, input.turnstileToken)
-if (!humanVerified) {
-  return new Response('Turnstile verification failed', { status: 403 })
-}
+    const humanVerified = await verifyTurnstile(env, input.turnstileToken)
+    if (!humanVerified) {
+      return new Response('Turnstile verification failed', { status: 403 })
+    }
 
-const hash = await sha256Hex(JSON.stringify(input))
-const cache = caches.default
-const adviceCacheKey = new Request(`https://cache.local/advice?hash=${hash}`)
-const cachedAdvice = await cache.match(adviceCacheKey)
+    const hash = await sha256Hex(JSON.stringify(input))
+    const cache = caches.default
+    const adviceCacheKey = new Request(`https://cache.local/advice?hash=${hash}`)
+    const cachedAdvice = await cache.match(adviceCacheKey)
 
-if (cachedAdvice) {
-  const text = await cachedAdvice.text()
-  return streamText(text)
-}
+    if (cachedAdvice) {
+      const text = await cachedAdvice.text()
+      return streamText(text)
+    }
 
-const weather = await getMockWeather(input.city)
-const backendAdvice = await callTcmBackend(env, input, weather)
-const adviceText = backendAdvice ?? buildAdvice(input, weather)
+    const weather = await getMockWeather(input.profile.city)
+    const backendAdvice = await callTcmBackend(env, input, weather)
+    const adviceText = backendAdvice ?? buildAdvice(input, weather)
 
-await cache.put(
-  adviceCacheKey,
-  new Response(adviceText, {
-    headers: { 'cache-control': 'public, max-age=600' }
-  })
-)
+    await cache.put(
+      adviceCacheKey,
+      new Response(adviceText, {
+        headers: { 'cache-control': 'public, max-age=600' }
+      })
+    )
 
-return streamText(adviceText)
-} catch (error) {
-return new Response(`Bad request: ${String(error)}`, { status: 400 })
-}
+    return streamText(adviceText)
+  } catch (error) {
+    return new Response(`Bad request: ${String(error)}`, { status: 400 })
+  }
 }

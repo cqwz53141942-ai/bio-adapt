@@ -1,13 +1,26 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-type Payload = {
+type Sex = 'male' | 'female' | 'other'
+
+type Birth = {
+  year: number
+  month: number
+  day: number
+  hour: number
+}
+
+type Profile = {
   city: string
-  sex: 'male' | 'female' | 'other'
-  symptoms: string
-  wearableJson: string
-  birth: { year: number; month: number; day: number; hour: number }
+  sex: Sex
+  birth: Birth
+}
+
+type FormPayload = {
+  profile: Profile
+  symptoms: string[]
+  wearable: Record<string, unknown>
   age: number
   turnstileToken?: string
 }
@@ -18,7 +31,7 @@ const loading = ref(false)
 const error = ref('')
 const streamOutput = ref('')
 const sections = ref<Array<{ title: string; content: string }>>([])
-const payload = ref<Payload | null>(null)
+const payload = ref<FormPayload | null>(null)
 
 function parseSections(text: string) {
   const results: Array<{ title: string; content: string }> = []
@@ -52,11 +65,39 @@ async function loadPayload() {
   }
 
   try {
-    payload.value = JSON.parse(raw) as Payload
+    payload.value = JSON.parse(raw) as FormPayload
   } catch {
     payload.value = null
   }
 }
+
+function summarizeWearable(wearable: Record<string, unknown>) {
+  const parts: string[] = []
+  const steps = typeof wearable.steps === 'number' ? wearable.steps : undefined
+  const hrv = typeof wearable.hrv === 'number' ? wearable.hrv : undefined
+  const sleepHours = typeof wearable.sleepHours === 'number' ? wearable.sleepHours : undefined
+
+  if (steps !== undefined) parts.push(`步数 ${steps}`)
+  if (hrv !== undefined) parts.push(`HRV ${hrv}`)
+  if (sleepHours !== undefined) parts.push(`睡眠 ${sleepHours.toFixed(1)} 小时`)
+
+  return parts.length ? parts.join('，') : '未提供关键字段'
+}
+
+const analysisBasis = computed(() => {
+  if (!payload.value) return []
+  const profile = payload.value.profile
+  const birth = `${profile.birth.year}年${profile.birth.month}月${profile.birth.day}日${profile.birth.hour}时`
+  const symptoms = payload.value.symptoms.length ? payload.value.symptoms.join('、') : '无明显不适'
+  const wearableSummary = summarizeWearable(payload.value.wearable)
+
+  return [
+    `城市：${profile.city}`,
+    `出生时间：${birth}`,
+    `症状摘要：${symptoms}`,
+    `可穿戴摘要：${wearableSummary}`
+  ]
+})
 
 async function fetchAdvice() {
   if (!payload.value) return
@@ -66,25 +107,11 @@ async function fetchAdvice() {
   sections.value = []
   loading.value = true
 
-  let wearable: unknown
-  try {
-    wearable = JSON.parse(payload.value.wearableJson)
-  } catch {
-    loading.value = false
-    error.value = '可穿戴数据 JSON 格式不正确。'
-    return
-  }
-
   const requestBody = {
-    city: payload.value.city,
+    profile: payload.value.profile,
+    symptoms: payload.value.symptoms,
+    wearable: payload.value.wearable,
     age: payload.value.age,
-    sex: payload.value.sex,
-    symptoms: payload.value.symptoms
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
-    wearable,
-    birth: payload.value.birth,
     turnstileToken: payload.value.turnstileToken
   }
 
@@ -151,7 +178,7 @@ onMounted(async () => {
       <div>
         <h1 style="margin:0;">本草智养 · 建议结果</h1>
         <p style="color:#555; margin:6px 0 0;">
-          建议为养生参考，非诊断结论。
+          建议为养生参考，不构成诊断或治疗建议。
         </p>
       </div>
       <button type="button" @click="router.push('/input')" style="padding:8px 12px; cursor:pointer;">
@@ -167,15 +194,12 @@ onMounted(async () => {
     </div>
 
     <section v-else style="margin-top:20px;">
-      <div style="display:flex; gap:12px; flex-wrap:wrap; color:#666;">
-        <span>城市：{{ payload.city }}</span>
-        <span>性别：{{ payload.sex === 'male' ? '男' : payload.sex === 'female' ? '女' : '其他' }}</span>
-        <span>
-          出生：{{ payload.birth.year }}年{{ payload.birth.month }}月{{ payload.birth.day }}日
-          {{ payload.birth.hour }}时
-        </span>
-        <span>年龄（估算）：{{ payload.age }}</span>
-      </div>
+      <section style="border:1px solid #eee; padding:12px; border-radius:8px;">
+        <h2 style="margin:0 0 8px;">本次分析依据</h2>
+        <ul style="margin:0; padding-left:18px; color:#555;">
+          <li v-for="item in analysisBasis" :key="item">{{ item }}</li>
+        </ul>
+      </section>
 
       <p v-if="loading" style="margin-top:16px; color:#555;">建议生成中，请稍候...</p>
       <p v-if="error" style="margin-top:16px; color:#c00;">{{ error }}</p>

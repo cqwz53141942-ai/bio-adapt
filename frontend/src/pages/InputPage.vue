@@ -11,6 +11,20 @@ type Birth = {
   hour: number
 }
 
+type Profile = {
+  city: string
+  sex: Sex
+  birth: Birth
+}
+
+type FormPayload = {
+  profile: Profile
+  symptoms: string[]
+  wearable: Record<string, unknown>
+  age: number
+  turnstileToken?: string
+}
+
 declare global {
   interface Window {
     turnstile?: {
@@ -29,7 +43,6 @@ declare global {
 }
 
 const router = useRouter()
-
 const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined
 
 const cityOptions = [
@@ -62,7 +75,7 @@ const cityOptions = [
 
 const city = ref(cityOptions[0])
 const sex = ref<Sex>('other')
-const symptoms = ref('疲劳, 睡眠不足')
+const symptomsText = ref('疲劳, 睡眠不足')
 const wearableJson = ref('{"steps":7200,"hrv":35,"sleepHours":6.1}')
 
 const now = new Date()
@@ -89,10 +102,11 @@ const turnstileWidgetId = ref<string | null>(null)
 
 const age = computed(() => {
   const birth = new Date(birthYear.value, birthMonth.value - 1, birthDay.value, birthHour.value)
-  let years = now.getFullYear() - birth.getFullYear()
+  const nowDate = new Date()
+  let years = nowDate.getFullYear() - birth.getFullYear()
   const hasBirthdayPassed =
-    now.getMonth() > birth.getMonth() ||
-    (now.getMonth() === birth.getMonth() && now.getDate() >= birth.getDate())
+    nowDate.getMonth() > birth.getMonth() ||
+    (nowDate.getMonth() === birth.getMonth() && nowDate.getDate() >= birth.getDate())
   if (!hasBirthdayPassed) years -= 1
   return Math.max(0, years)
 })
@@ -146,6 +160,13 @@ async function checkHealth() {
   }
 }
 
+function normalizeSymptoms(input: string) {
+  return input
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 function persistForm() {
   const birth: Birth = {
     year: birthYear.value,
@@ -154,12 +175,16 @@ function persistForm() {
     hour: birthHour.value
   }
 
-  const payload = {
+  const profile: Profile = {
     city: city.value,
     sex: sex.value,
-    symptoms: symptoms.value,
-    wearableJson: wearableJson.value,
-    birth,
+    birth
+  }
+
+  const payload: FormPayload = {
+    profile,
+    symptoms: normalizeSymptoms(symptomsText.value),
+    wearable: JSON.parse(wearableJson.value),
     age: age.value,
     turnstileToken: turnstileToken.value || undefined
   }
@@ -260,7 +285,7 @@ onMounted(() => {
 
       <label>
         近期症状（逗号分隔）
-        <input v-model="symptoms" type="text" style="width:100%; padding:8px;" />
+        <input v-model="symptomsText" type="text" style="width:100%; padding:8px;" />
       </label>
 
       <label>
