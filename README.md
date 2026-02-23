@@ -33,6 +33,8 @@ Turnstile 防刷：
 - `TCM_BACKEND_URL`：后端分析服务地址（配置后将优先调用，失败则自动回退本地规则引擎）
 - `TCM_BACKEND_API_KEY`：后端分析服务 API Key（可选）
 
+说明：天气按城市维度做短 TTL 缓存，切换城市会重新计算建议。
+
 ## 本地开发
 
 ```bash

@@ -146,6 +146,19 @@ const analysisBasis = computed(() => {
   ]
 })
 
+const requestKey = computed(() => {
+  if (!payload.value) return ''
+  const profile = payload.value.profile
+  return [
+    profile.city,
+    profile.birth.year,
+    profile.birth.month,
+    profile.birth.day,
+    profile.birth.hour,
+    payload.value.symptoms.join('|')
+  ].join(':')
+})
+
 async function fetchAdvice() {
   if (!payload.value) return
 
@@ -163,6 +176,7 @@ async function fetchAdvice() {
   }
 
   try {
+    sessionStorage.setItem('bio-adapt-advice-key', requestKey.value)
     const response = await fetch('/api/advice', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -209,6 +223,13 @@ async function fetchAdvice() {
 
 watch(streamOutput, (value) => {
   sections.value = parseSections(value)
+})
+
+watch(requestKey, (value, previous) => {
+  if (!value || value === previous) return
+  streamOutput.value = ''
+  sections.value = []
+  error.value = ''
 })
 
 onMounted(async () => {

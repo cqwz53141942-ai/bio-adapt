@@ -99,6 +99,18 @@ async function verifyTurnstile(env: Env, token?: string): Promise<boolean> {
 
 async function getMockWeather(city: string): Promise<{ city: string; tempC: number; humidity: number }> {
   const normalizedCity = city.trim() || '未知'
+  const normalizedKey = normalizedCity.toLowerCase()
+  const cache = caches.default
+  // Cache key contains city + 10-min bucket to ensure city-specific freshness.
+  const timeBucket = Math.floor(Date.now() / 600000)
+  const key = new Request(
+    `https://cache.local/weather?city=${encodeURIComponent(normalizedKey)}&bucket=${timeBucket}`
+  )
+  const cached = await cache.match(key)
+  if (cached) {
+    return cached.json()
+  }
+
   const now = new Date()
   const seed = normalizedCity.length
   const hour = now.getHours()
@@ -107,11 +119,21 @@ async function getMockWeather(city: string): Promise<{ city: string; tempC: numb
   const humidityBase = 50 + (seed % 15)
   const humiditySwing = Math.round(Math.cos((hour / 24) * Math.PI * 2) * 6)
 
-  return {
+  const weather = {
     city: normalizedCity,
     tempC: tempBase + tempSwing,
     humidity: Math.min(90, Math.max(20, humidityBase + humiditySwing))
   }
+
+  const response = new Response(JSON.stringify(weather), {
+    headers: {
+      'content-type': 'application/json',
+      'cache-control': 'public, max-age=600'
+    }
+  })
+
+  await cache.put(key, response.clone())
+  return weather
 }
 
 async function callTcmBackend(
@@ -278,9 +300,11 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
 
     const weather = await getMockWeather(input.profile.city)
 
+    // Advice cache includes city + weather in the hash, and a short TTL bucket.
     const hash = await sha256Hex(JSON.stringify({ input, weather }))
     const cache = caches.default
-    const adviceCacheKey = new Request(`https://cache.local/advice?hash=${hash}`)
+    const adviceBucket = Math.floor(Date.now() / 300000)
+    const adviceCacheKey = new Request(`https://cache.local/advice?hash=${hash}&bucket=${adviceBucket}`)
     const cachedAdvice = await cache.match(adviceCacheKey)
 
     if (cachedAdvice) {
@@ -293,7 +317,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     await cache.put(
       adviceCacheKey,
       new Response(adviceText, {
-        headers: { 'cache-control': 'public, max-age=60' }
+        headers: { 'cache-control': 'public, max-age=300' }
       })
     )
 

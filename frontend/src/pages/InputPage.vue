@@ -189,6 +189,19 @@ function persistForm() {
     turnstileToken: turnstileToken.value || undefined
   }
 
+  const requestKey = [
+    profile.city,
+    profile.birth.year,
+    profile.birth.month,
+    profile.birth.day,
+    profile.birth.hour,
+    payload.symptoms.join('|')
+  ].join(':')
+
+  // Clear any previous cached result when input changes.
+  sessionStorage.removeItem('bio-adapt-advice')
+  sessionStorage.removeItem('bio-adapt-advice-key')
+  sessionStorage.setItem('bio-adapt-form-key', requestKey)
   sessionStorage.setItem('bio-adapt-form', JSON.stringify(payload))
 }
 
